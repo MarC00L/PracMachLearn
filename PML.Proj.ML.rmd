@@ -1,0 +1,242 @@
+---
+title: "PML Course Project - June 2014"
+author: "Marc Luker"
+date: "Thursday, June 19, 2014"
+output: html_document
+---
+Given time and available computing resources, I have chosen to find a minimially viable solution so that I have something to turn in at the deadline.  Then, as time permits, I can explore more and more complex solutuions.  As an example, I am arbitrarily deciding to work with only the subset of the data which is numeric  -- primarily because I know HOW to reduce dimensions when working with numeric data.  Also I am currently reading about knn and Naive Bayes models for classification outside of class, so I will focus on these relatively simple models to start.
+
+Since prediction accuracy is my main immediate goal, if I can create acceptable performance using just the subset of numeric data, then I can expand my investigation to the full data set at a later time.
+
+*General Process:*
+The basic steps of my process which I will outline in this report are
+
+- (1) Load and Partition Data
+- (2) Data Preprocessing
+- (3) Model Building, Tuning, and Validation
+- (4) Re-Train Chosen Model on Full Data Set
+- (5) Predict Test Set Responses
+- (6) Evaluate Final Results
+
+**(1) Load and Partition Data**
+
+While the PML course project has a separate set of 20 test cases, I am partitioning the data set into training and validation sets so that I have independent data to later compare the performance of different models on.  I have chosen to divide the data (19622 samples by 160 predictors) into a 75% training set, 25% validation set.
+```{r LoadTrainingData}
+library(caret);library(ggplot2);library(klaR)
+set.seed(61575)
+setwd("C:/Users/marc_luker/Desktop/COURSERA/Practical Machine Learning_6.2.14")  
+dat <- read.csv("pml-training.csv")
+inTrain = createDataPartition(dat$classe, p=3/4)[[1]]
+training = dat[inTrain,]
+validating = dat[-inTrain,]
+y.tr <- training$classe
+y.val <-validating$classe
+```
+**(2) Data Preprocessing**
+
+*Focus on numeric variables in data set:*
+```{r}
+col.num <- which(sapply(training, is.numeric))
+training<-training[,col.num]
+```
+> 160 predictors -> 123 predictors
+
+*Filter and remove near-zero variance predictors:*
+```{r}
+col.nzv<-nearZeroVar(training)
+training <- training[,-col.nzv]
+```
+> 123 predictors -> 102 predictors
+
+*Filter out columns with high percentage (>95%) of NA values:*
+```{r}
+na.perc <- apply(training, 2, function(x){sum(is.na(x))/length(x)})
+col.highNA <- which(na.perc > 0.95)
+training<-training[,-col.highNA]
+```
+> 102 predictors -> 56 predictors
+
+*Filter and remove predictors based on large between-predictor correlations:*
+```{r}
+correlations <- cor(training)
+col.highCorr <- findCorrelation(correlations, cutoff = .90, verbose = FALSE)
+training <- training[,-col.highCorr]
+```
+> 56 predictors -> 51 predictors
+
+*Apply transformations: Box-Cox, center, scale, and then run default PCA:*
+```{r}
+xform.tr <- preProcess(training, method=c("BoxCox", "center", "scale", "pca"))
+trainPCA <- predict(xform.tr, training)
+```
+> 51 predictors -> 29 transformed predictors
+
+NOTE: Be sure to perform exact same filtering and transformations on the validation set:
+```{r ProcValidData}
+validating <-validating[,col.num]
+validating <-validating[,-col.nzv]
+validating <-validating[,-col.highNA]
+validating <-validating[,-col.highCorr]
+validPCA <-predict(xform.tr, validating)
+```
+**(3) Model Building, Tuning, and Validation**
+
+Set-up all <caret> package tuning to use 10-fold cross validation:
+```{r SetCaret}
+fitControl <- trainControl(method = "cv",number = 10)
+```
+*kNN Model Building*
+
+```{r kNNtrain, cache=TRUE}
+system.time(model.knn <- train(y.tr~.,
+                               data = trainPCA,
+                               method ="knn",
+                               tuneLength = 5,
+                               trControl = fitControl))
+print(model.knn, digits=3)
+```
+> Model Building Time (min): about 44 seconds
+
+> Out of Sample Error Estimate:  Kappa = 0.964 (Accuracy = 0.972)
+
+*Naive Bayes Model Building*
+
+```{r NBtrain,eval=FALSE}
+fitControl <- trainControl(method = "cv",number = 3)  #Had some trouble with computational time
+system.time(model.nb <- train(y.tr~.,
+                              data = trainPCA,
+                              method="nb",
+                              trControl = fitControl))
+print(model.nb, digits=3) 
+```
+Naive Bayes 
+
+14718 samples
+   
+   28 predictors
+   
+   5 classes: 'A', 'B', 'C', 'D', 'E' 
+
+No pre-processing
+
+Resampling: Cross-Validated (3 fold) 
+
+Summary of sample sizes: 9813, 9811, 9812 
+
+Resampling results across tuning parameters:
+
+  usekernel  Accuracy  Kappa  Accuracy SD  Kappa SD
+  
+  FALSE      0.704     0.626  0.00621      0.00796 
+  
+  TRUE       0.773     0.714  0.00666      0.00832 
+
+Tuning parameter 'fL' was held constant at a value of 0
+
+Accuracy was used to select the optimal model using  the largest value.
+
+The final values used for the model were fL = 0 and usekernel = TRUE. 
+
+> Model Building time (min): about 3 minutes
+
+> Out of Sample Error Estimate:  Kappa = 0.714 (Accuracy = 0.773)
+
+*Evaluate performance of both models on the validation set:*
+```{r ValidPerfkNN}
+pred.knn <-predict(model.knn,validPCA)
+confusionMatrix(pred.knn,y.val)
+```
+
+```{r ValidPerfNB, eval=FALSE}
+pred.nb <-predict(model.nb,validPCA)
+confusionMatrix(pred.nb,y.val)
+```
+Confusion Matrix and Statistics
+
+          Reference
+Prediction    A    B    C    D    E
+
+         A 1149   99   12    2    0
+         
+         B  157  677   78   21   23
+         
+         C   55  106  670  138   56
+         
+         D   25   27   72  581   82
+         
+         E    9   40   23   62  740
+
+Overall Statistics
+                                          
+               Accuracy : 0.7783       
+               
+                 95% CI : (0.7665, 0.7899)
+                 
+    No Information Rate : 0.2845          
+    
+    P-Value [Acc > NIR] : < 2.2e-16       
+                                          
+                  Kappa : 0.7207          
+                  
+ Mcnemar's Test P-Value : < 2.2e-16       
+
+Statistics by Class:
+
+                     Class: A Class: B Class: C Class: D Class: E
+                     
+Sensitivity            0.8237   0.7134   0.7836   0.7226   0.8213
+
+Specificity            0.9678   0.9295   0.9123   0.9498   0.9665
+
+Pos Pred Value         0.9105   0.7082   0.6537   0.7382   0.8467
+
+Neg Pred Value         0.9325   0.9311   0.9523   0.9458   0.9600
+
+Prevalence             0.2845   0.1935   0.1743   0.1639   0.1837
+
+Detection Rate         0.2343   0.1381   0.1366   0.1185   0.1509
+
+Detection Prevalence   0.2573   0.1949   0.2090   0.1605   0.1782
+
+Balanced Accuracy      0.8957   0.8214   0.8480   0.8362   0.8939
+
+The kNN model has superior performance both based on the out of sample estimates (0.964 vs. 0.714) and validation set performance (kappa: 0.965 vs. 0.721).  Therefore, I am going to select kNN (with k=5) as my final model.  
+
+** (4) Re-Train Chosen Model on Full Data Set**
+```{r ReTrain, cache=TRUE}
+# Preprocess full training set as before
+y.final <- dat$classe
+dat.f <-dat[,col.num]
+dat.f <-dat.f[,-col.nzv]
+dat.f <-dat.f[,-col.highNA]
+dat.f <-dat.f[,-col.highCorr]
+xform.final <- preProcess(training, method=c("BoxCox", "center", "scale", "pca"))
+finalPCA <-predict(xform.final, dat.f)
+
+system.time(model.knn.f <- train(y.final~., data = finalPCA, method="knn", trControl = fitControl))
+```
+
+** (5) Predict Test Set Responses**
+```{r TestPred}
+# Read in test set and preprocess
+test.dat <- read.csv("pml-testing.csv")
+test.dat <-test.dat[,col.num]
+test.dat <-test.dat[,-col.nzv]
+test.dat <-test.dat[,-col.highNA]
+test.dat <-test.dat[,-col.highCorr]
+testPCA <-predict(xform.final, test.dat)
+
+# Predict test responses
+pred.knn.t <-predict(model.knn.f,testPCA)
+```
+**(6) Evaluate Final Results**
+
+Based on submission of answers at Coursera PML site, my final kNN model correctly predicted 19 of 20 test cases - i.e. 95% accuracy:
+```{r}
+test.truth <- as.factor(c("B","A", "B", "A", "A", "E", "D","B", "A", "A", "B", "C", "B",
+                "A","E","E","A","B","B","B"))  #determined post-submission
+cor <-as.character(pred.knn.t==test.truth)
+final<-data.frame(prediction=pred.knn.t,correct=cor)
+final
+confusionMatrix(pred.knn.t,test.truth)
+```
